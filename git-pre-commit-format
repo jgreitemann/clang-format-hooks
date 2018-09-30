@@ -212,6 +212,11 @@ ${b}CONFIGURATION${n}
         terminal, you can disable the interactive prompt with:
             ${i}\$ git config hooks.clangFormatDiffInteractive false${n}
 
+    ${b}hooks.clangFormatAutoApplyPatch${n} (default: false)
+        If the hook is run in non-interactive mode, it can be configured to
+        automatically apply the necessary patches and continue with the commit,
+        rather than complaining and blocking the commit.
+
     ${b}hooks.clangFormatDiffStyle${n} (default: file)
         Unless a different style is specified, the hook expects a file named
         .clang-format to exist in the repository. This file should contain the
@@ -285,14 +290,41 @@ if [ "$interactive" != false ]; then
 fi
 readonly interactive
 
+auto_apply=$(cd "$top_dir" && git config --bool hooks.clangFormatAutoApplyPatch)
+if [ "$auto_apply" != true ]; then
+    # auto_apply is not the default, so anything that is not true is converted to
+    # false, including possibly invalid values.
+    auto_apply=false
+fi
+readonly auto_apply
+
+function apply_patch() {
+    patch -p0 < "$patch" || \
+        error_exit \
+        $'\n' \
+        $'Cannot apply patch to local files.\n' \
+        $'Have you modified the file locally after starting the commit?'
+    git apply -p0 --cached < "$patch" || \
+        error_exit \
+        $'\n' \
+        $'Cannot apply patch to git staged changes.\n' \
+        $'This may happen if you have some overlapping unstaged changes. To solve\n' \
+        $'you need to stage or reset changes manually.'
+}
+
 if [ "$interactive" = false ]; then
     echo "${b}The staged content is not formatted correctly.${n}"
-    echo "You can fix the formatting with:"
-    echo "    ${i}\$ ./$apply_format_relative_to_top_dir --apply-to-staged${n}"
-    echo
-    echo "You can also make this script interactive (if you use git from a terminal) with:"
-    echo "    ${i}\$ git config hooks.clangFormatDiffInteractive true${n}"
-    exit 1
+    if [ "$auto_apply" = false ]; then
+        echo "You can fix the formatting with:"
+        echo "    ${i}\$ ./$apply_format_relative_to_top_dir --apply-to-staged${n}"
+        echo
+        echo "You can also make this script interactive (if you use git from a terminal) with:"
+        echo "    ${i}\$ git config hooks.clangFormatDiffInteractive true${n}"
+        exit 1
+    else
+        apply_patch
+        exit 0
+    fi
 fi
 
 if hash colordiff 2> /dev/null; then
@@ -323,17 +355,7 @@ while true; do
     case "$answer" in
 
         [aA] )
-            patch -p0 < "$patch" || \
-                error_exit \
-                $'\n' \
-                $'Cannot apply patch to local files.\n' \
-                $'Have you modified the file locally after starting the commit?'
-            git apply -p0 --cached < "$patch" || \
-                error_exit \
-                $'\n' \
-                $'Cannot apply patch to git staged changes.\n' \
-                $'This may happen if you have some overlapping unstaged changes. To solve\n' \
-                $'you need to stage or reset changes manually.'
+            apply_patch
             ;;
 
         [fF] )
